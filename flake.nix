@@ -18,11 +18,11 @@
 
         meta = {
           homepage = "https://github.com/Sebastiaan-Alvarez-Rodriguez/financer";
-          description = "Compares energy and gas contracts to find optimal contracts.";
+          description = "Small project to help making, evaluating, projecting financial decisions.";
         };
         src = ./.;
 
-        propagatedBuildInputs = [ buildPythonPackages.numpy buildPythonPackages.pandas buildPythonPackages.scipy ];
+        propagatedBuildInputs = with buildPythonPackages; [ numpy pandas scipy matplotlib];
 
         # By default tests are executed, but we don't want to.
         dontUseSetuptoolsCheck = true;
@@ -33,7 +33,7 @@
       };
       packages.default = financer;
       devShells.default = pkgs.mkShell rec {
-        packages = [ buildPythonPackages.numpy buildPythonPackages.pandas buildPythonPackages.scipy ];
+        packages = with buildPythonPackages; [ numpy pandas scipy matplotlib];
       };
     }
   );
