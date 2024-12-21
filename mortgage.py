@@ -2,11 +2,15 @@ import argparse
 import inspect
 import functools
 import numpy as np
+
+import matplotlib.pyplot as plt
+
 import sys
 
 
 from datetime import datetime
 
+### Helper functions
 def fn_name_comps():
     '''returns all computation functions to choose from'''
     return [name[5:] for name, object in inspect.getmembers(sys.modules[__name__]) if inspect.isfunction(object) and name.startswith('comp_')]
@@ -23,18 +27,40 @@ def fn_load(name):
 def calc_annuity(amount, interest, duration):
     return ((interest/12) / (1-((1+interest/12) ** -duration))) * amount
 
-def calc_payment_base(amount, interest, type, duration):
+def calc_base(amount, interest, type, duration):
+    '''Returns the debt payments to be paid each month'''
     if type == 'linear':
-        factor = amount / duration
-        return np.full(duration, factor) # amount to be paid each month for the base loan (no interest)
+        return np.full(duration, amount / duration) # amount to be paid each month for the base loan (no interest)
     elif type == 'annuity': # ref: https://www.homefinance.nl/hypotheek/berekenen/annuiteit/
         annuity = calc_annuity(amount, interest, duration)
         return np.full(duration, annuity) - calc_payment_interest(amount, interest, type, duration)
 
-def calc_payment_interest(amount, interest, type, duration):
-    if type == 'linear' or type == 'annuity':
-        factor = amount / duration
-        return (np.full(duration, amount) - np.arange(duration)*factor)*interest/12 # simply put: each month you pay the open debt * interest/12
+def calc_interest(debt, interest):
+    '''Returns the interest to be paid each month'''
+    return debt*interest/12 # simply put: each month you pay the open debt * interest / 12
+
+# def calc_payment_interest(amount, interest, type, duration):
+#     if type == 'linear' or type == 'annuity':
+#         factor = amount / duration
+#         return (np.full(duration, amount) - np.arange(duration)*factor)*interest/12 # simply put: each month you pay the open debt * interest/12
+
+def calc_debt(debt_payments):
+    '''Returns the remaining debt at each month'''
+    return np.full(len(debt_payments), np.sum(debt_payments) - np.cumsum(debt_payments))
+    
+
+### computations (with their respective parser functions)
+def parser_basic(subparsers):
+    return subparsers.add_parser('basic')
+
+def comp_basic(args):
+    base = calc_base(args.loan, args.interest, args.type, args.duration)
+    debt = calc_debt(base)
+    interest = calc_interest(debt, args.interest)
+    combined = base + interest
+    print(combined)
+    print(f'total: {np.sum(combined)}')
+
 
 def parser_early_payment(subparsers):
     sub = subparsers.add_parser('early_payment')
@@ -44,11 +70,41 @@ def parser_early_payment(subparsers):
 
 def comp_early_payment(args):
     # TODO: Maybe add support for multiple occurences
-    print(args.amount)
-    
-    pass
+    base = calc_base(args.loan, args.interest, args.type, args.duration)
+    debt = calc_debt(base)
+    interest = calc_interest(debt, args.interest)
+    combined = base + interest
+
+    print('If not paying early:')
+    print(combined)
+    print(f'total: {np.sum(combined)}')
+    print()
+
+    month_idx = (args.date.year - args.start.year)*12 + args.date.month - args.start.month # month where extra payment happened
+    early_base = np.copy(base)
+    early_base[month_idx] += args.amount
+    early_base[month_idx+1:] = calc_base(args.loan-np.sum(early_base[:month_idx+1]), args.interest, args.type, args.duration-month_idx-1)
+    early_debt = calc_debt(early_base)
+    early_interest = calc_interest(early_debt, args.interest)
+    early_combined = early_base + early_interest
+
+    print('If paying early:')
+    print(early_combined)
+    print(np.sum(early_combined))
+    if args.visual:
+        # x = [np.datetime64(args.start) + np.arange(0, args.duration, dtype='datetime64[D]')]
+        x = np.arange(args.start, args.duration, dtype='datetime64[D]')
+        plt.plot(x, debt, label='debt', marker='.')
+        plt.plot(x, early_debt, label='debt (w/ early payment)', marker='.')
+        plt.plot(x, np.cumsum(combined), label='accumulated payments', marker='.')
+        plt.plot(x, np.cumsum(early_combined), label='accumulated payments (w/ early payments)', marker='.')
+        plt.ylabel('euros')
+
+        plt.legend()
+        plt.show()
 
 
+### Main program section
 def main():
     # Simple program to calculate normalized cost for power & gas grid connections.
     parser = argparse.ArgumentParser()
@@ -71,13 +127,6 @@ def main():
         fn_load(f'comp_{args.computation}')(args)
     else:
         print('No specific computation requested')
-        base = calc_payment_base(args.loan, args.interest, args.type, args.duration)
-        interest = calc_payment_interest(args.loan, args.interest, args.type, args.duration)
-        combined = base + interest
-        print(combined)
-        print()
-        print()
-        print(f'total: {np.sum(combined)}')
 
 if __name__ == '__main__':
     main()
