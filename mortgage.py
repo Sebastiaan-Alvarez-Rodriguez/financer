@@ -4,6 +4,7 @@ import functools
 import numpy as np
 
 import matplotlib.pyplot as plt
+from matplotlib.dates import date2num
 
 import sys
 
@@ -13,14 +14,14 @@ from datetime import datetime
 ### Helper functions
 def fn_name_comps():
     '''returns all computation functions to choose from'''
-    return [name[5:] for name, object in inspect.getmembers(sys.modules[__name__]) if inspect.isfunction(object) and name.startswith('comp_')]
+    return [name[5:] for name, object in inspect.getmembers(sys.modules['__main__']) if inspect.isfunction(object) and name.startswith('comp_')]
 
 def fn_name_parser():
     '''returns all parser functions for computations'''
     return [f'parser_{x}' for x in fn_name_comps()]
 
 def fn_load(name):
-    '''loads given function in current module'''
+    '''loads given function in main invocation module'''
     return getattr(sys.modules['__main__'], name)
 
 
@@ -58,7 +59,6 @@ def comp_basic(args):
     debt = calc_debt(base)
     interest = calc_interest(debt, args.interest)
     combined = base + interest
-    print(combined)
     print(f'total: {np.sum(combined)}')
 
 
@@ -66,6 +66,7 @@ def parser_early_payment(subparsers):
     sub = subparsers.add_parser('early_payment')
     sub.add_argument('--amount', type=float, required=True, help='Sum to be paid early')
     sub.add_argument('--date', type=lambda s: datetime.strptime(s, '%Y-%m-%d'), required=True, help='Date at which sum is paid early (as yyyy-mm-dd).')
+    sub.add_argument('--decision', choices=['shorten', 'keep'], required=True, help='Decision on what happens after early payment: Shorten the duration and keep paying as-is now (shorten) OR keep the duration as-is and recalculate monthly payments (keep).')
     return sub
 
 def comp_early_payment(args):
@@ -76,28 +77,40 @@ def comp_early_payment(args):
     combined = base + interest
 
     print('If not paying early:')
-    print(combined)
     print(f'total: {np.sum(combined)}')
     print()
 
     month_idx = (args.date.year - args.start.year)*12 + args.date.month - args.start.month # month where extra payment happened
     early_base = np.copy(base)
     early_base[month_idx] += args.amount
-    early_base[month_idx+1:] = calc_base(args.loan-np.sum(early_base[:month_idx+1]), args.interest, args.type, args.duration-month_idx-1)
+    if args.decision == 'keep':
+        early_base[month_idx+1:] = calc_base(args.loan-np.sum(early_base[:month_idx+1]), args.interest, args.type, args.duration-month_idx-1)
+    elif args.decision == 'shorten':
+        pass
+        # TODO: shorten calculation
     early_debt = calc_debt(early_base)
     early_interest = calc_interest(early_debt, args.interest)
     early_combined = early_base + early_interest
 
     print('If paying early:')
-    print(early_combined)
-    print(np.sum(early_combined))
+    print(f'total: {np.sum(early_combined)}')
+
     if args.visual:
-        # x = [np.datetime64(args.start) + np.arange(0, args.duration, dtype='datetime64[D]')]
-        x = np.arange(args.start, args.duration, dtype='datetime64[D]')
-        plt.plot(x, debt, label='debt', marker='.')
-        plt.plot(x, early_debt, label='debt (w/ early payment)', marker='.')
-        plt.plot(x, np.cumsum(combined), label='accumulated payments', marker='.')
-        plt.plot(x, np.cumsum(early_combined), label='accumulated payments (w/ early payments)', marker='.')
+        x = np.arange(args.start, args.duration, dtype='datetime64[M]')
+        x = date2num(x)
+
+        fig, ax = plt.subplots()
+        ax.plot(x, debt, label='debt', marker='.')
+        ax.plot(x, early_debt, label='debt (w/ early payment)', marker='.')
+
+        w = 15.5 # this is the bar width, expressed in days
+        ax.bar(x-w, np.cumsum(base), label='debt paid', width=w)
+        ax.bar(x-w, np.cumsum(interest), bottom=np.cumsum(base), label='interest', width=w)
+
+        ax.bar(x, np.cumsum(early_base), label='debt paid (early)', width=w)
+        ax.bar(x, np.cumsum(early_interest), bottom=np.cumsum(early_base), label='interest (early)', width=w)
+
+        ax.xaxis_date()
         plt.ylabel('euros')
 
         plt.legend()
