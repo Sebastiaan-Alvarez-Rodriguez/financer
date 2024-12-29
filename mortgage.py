@@ -116,6 +116,7 @@ def comp_early_payment(args):
         plt.legend()
         plt.show()
 
+    # TODO: calc net trouble
 
 ### Main program section
 def main():
