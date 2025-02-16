@@ -49,6 +49,20 @@ def calc_debt(debt_payments):
     '''Returns the remaining debt at each month'''
     return np.full(len(debt_payments), np.sum(debt_payments) - np.cumsum(debt_payments))
     
+def calc_shorten_duration(base, amount):
+    total = 0
+    idx = 0
+    rev_base = base[::-1]
+    while total < amount and idx < len(base):
+        total += rev_base[idx]
+        idx += 1
+    if total >= amount:
+        ans =  base[:-idx] if total == amount else np.concatenate((base[:-idx], [round(total-amount, 2)])) # TODO: introduce more precise floating points
+        print(f'base (len={len(base)} (sum={np.sum(base)})')
+        print(f' ans (len={len(ans)} (sum={np.sum(ans)})')
+        print(f'total={total}, amount={amount}')
+        return ans
+    raise RuntimeError('Amount paid is too large! The entire loan will be paid off with this amount.')
 
 ### computations (with their respective parser functions)
 def parser_basic(subparsers):
@@ -65,12 +79,12 @@ def comp_basic(args):
 def parser_early_payment(subparsers):
     sub = subparsers.add_parser('early_payment')
     sub.add_argument('--amount', type=float, required=True, help='Sum to be paid early')
+    # TODO: Maybe add support for multiple occurences
     sub.add_argument('--date', type=lambda s: datetime.strptime(s, '%Y-%m-%d'), required=True, help='Date at which sum is paid early (as yyyy-mm-dd).')
     sub.add_argument('--decision', choices=['shorten', 'keep'], required=True, help='Decision on what happens after early payment: Shorten the duration and keep paying as-is now (shorten) OR keep the duration as-is and recalculate monthly payments (keep).')
     return sub
 
 def comp_early_payment(args):
-    # TODO: Maybe add support for multiple occurences
     base = calc_base(args.loan, args.interest, args.type, args.duration)
     debt = calc_debt(base)
     interest = calc_interest(debt, args.interest)
@@ -86,16 +100,37 @@ def comp_early_payment(args):
     if args.decision == 'keep':
         early_base[month_idx+1:] = calc_base(args.loan-np.sum(early_base[:month_idx+1]), args.interest, args.type, args.duration-month_idx-1)
     elif args.decision == 'shorten':
-        pass
-        # TODO: shorten calculation
+        early_base = calc_shorten_duration(early_base, args.amount)
     early_debt = calc_debt(early_base)
     early_interest = calc_interest(early_debt, args.interest)
     early_combined = early_base + early_interest
 
     print('If paying early:')
-    print(f'total: {np.sum(early_combined)}')
+    early_sum = np.sum(early_combined)
+    norm_sum = np.sum(combined)
+    delta_sum = norm_sum - early_sum # computes what the user saves by paying early
+    months = (len(early_combined) - month_idx)
+    annual_percentage_gain = (((args.amount+delta_sum)/args.amount)**(1/(months/12)) - 1) * 100 # computes how much the user saves per year as a percentage 
+    
+    print(f'total: {early_sum}')
+
+    if args.decision == 'shorten':
+        months_saved = len(combined) - len(early_combined)
+        annual_percentage_gain = (((args.amount+delta_sum)/args.amount)**(1/(months/12)) - 1) * 100
+        print(f'{args.decision}: By paying {args.amount} early, you save {months_saved} months ({months_saved/12} years) of payments.')
+
+    print(f'general: By paying {args.amount} early, you save {delta_sum} (i.e. {delta_sum * 100 / args.amount}%) over {months} months, ({months/12} years).')
+    print(f'general: This provides you {annual_percentage_gain}% yoy as "interest"')
 
     if args.visual:
+        if args.decision == 'shorten': # the early array is shortened. Numpy doesn't like it
+            early_base = np.concatenate((early_base, np.full(len(base)-len(early_base), 0)))
+            early_debt = np.concatenate((early_debt, np.full(len(debt)-len(early_debt), 0)))
+            early_interest = np.concatenate((early_interest, np.full(len(interest)-len(early_interest), 0)))
+        # assert np.sum(base) == np.sum(early_base) # TODO; this assertion fails due to a very small offset due to floating points
+        assert len(base) == len(early_base)
+        assert len(interest) == len(early_interest)
+        assert len(early_base) == len(early_interest)
         x = np.arange(args.start, args.duration, dtype='datetime64[M]')
         x = date2num(x)
 
@@ -105,10 +140,10 @@ def comp_early_payment(args):
 
         w = 15.5 # this is the bar width, expressed in days
         ax.bar(x-w, np.cumsum(base), label='debt paid', width=w)
-        ax.bar(x-w, np.cumsum(interest), bottom=np.cumsum(base), label='interest', width=w)
+        ax.bar(x-w, np.cumsum(interest), bottom=np.cumsum(base), label='interest paid', width=w)
 
         ax.bar(x, np.cumsum(early_base), label='debt paid (early)', width=w)
-        ax.bar(x, np.cumsum(early_interest), bottom=np.cumsum(early_base), label='interest (early)', width=w)
+        ax.bar(x, np.cumsum(early_interest), bottom=np.cumsum(early_base), label='interest paid (early)', width=w)
 
         ax.xaxis_date()
         plt.ylabel('euros')
