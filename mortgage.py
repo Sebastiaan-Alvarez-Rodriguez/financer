@@ -58,9 +58,6 @@ def calc_shorten_duration(base, amount):
         idx += 1
     if total >= amount:
         ans =  base[:-idx] if total == amount else np.concatenate((base[:-idx], [round(total-amount, 2)])) # TODO: introduce more precise floating points
-        print(f'base (len={len(base)} (sum={np.sum(base)})')
-        print(f' ans (len={len(ans)} (sum={np.sum(ans)})')
-        print(f'total={total}, amount={amount}')
         return ans
     raise RuntimeError('Amount paid is too large! The entire loan will be paid off with this amount.')
 
@@ -85,16 +82,20 @@ def parser_early_payment(subparsers):
     return sub
 
 def comp_early_payment(args):
+    month_idx = (args.date.year - args.start.year)*12 + args.date.month - args.start.month # month where extra payment happened
+
     base = calc_base(args.loan, args.interest, args.type, args.duration)
     debt = calc_debt(base)
     interest = calc_interest(debt, args.interest)
     combined = base + interest
+    if debt[month_idx] < args.amount:
+        print(f'error: You only have {debt[month_idx]} to pay off at given date.')
+        return
 
     print('If not paying early:')
     print(f'total: {np.sum(combined)}')
     print()
 
-    month_idx = (args.date.year - args.start.year)*12 + args.date.month - args.start.month # month where extra payment happened
     early_base = np.copy(base)
     early_base[month_idx] += args.amount
     if args.decision == 'keep':
@@ -109,7 +110,7 @@ def comp_early_payment(args):
     early_sum = np.sum(early_combined)
     norm_sum = np.sum(combined)
     delta_sum = norm_sum - early_sum # computes what the user saves by paying early
-    months = (len(early_combined) - month_idx)
+    months = (len(combined) - month_idx) # the remaining months (where the early payment happened)
     annual_percentage_gain = (((args.amount+delta_sum)/args.amount)**(1/(months/12)) - 1) * 100 # computes how much the user saves per year as a percentage 
     
     print(f'total: {early_sum}')
