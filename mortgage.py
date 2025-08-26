@@ -66,11 +66,136 @@ def parser_basic(subparsers):
     return subparsers.add_parser('basic')
 
 def comp_basic(args):
+    # Compute basic loan statistics
     base = calc_base(args.loan, args.interest, args.type, args.duration)
     debt = calc_debt(base)
     interest = calc_interest(debt, args.interest)
     combined = base + interest
     print(f'total: {np.sum(combined)}')
+    if args.visual:
+        x = np.arange(args.start, args.duration, dtype='datetime64[M]')
+        x = date2num(x)
+
+        fig, ax = plt.subplots()
+        ax.plot(x, debt, label='debt', marker='.')
+        # ax.plot(x, early_debt, label='debt (w/ early payment)', marker='.')
+
+        w = 15.5 # this is the bar width, expressed in days
+        ax.bar(x, np.cumsum(base), label='debt paid', width=w)
+        ax.bar(x, np.cumsum(interest), bottom=np.cumsum(base), label='interest paid', width=w)
+
+        # ax.bar(x+w, np.cumsum(early_base), label='debt paid (early)', width=w)
+        # ax.bar(x+w, np.cumsum(early_interest), bottom=np.cumsum(early_base), label='interest paid (early)', width=w)
+
+        ax.xaxis_date()
+        plt.ylabel('euros')
+
+        plt.legend()
+        plt.title('Payment accumulation over the years (bruto)')
+        plt.show()
+
+        # second graph starts here
+        fig, ax = plt.subplots()
+        # ax.plot(x, debt, label='debt', marker='.')
+        # ax.plot(x, early_debt, label='debt (w/ early payment)', marker='.')
+
+        w = 15.5 # this is the bar width, expressed in days
+        ax.bar(x, interest, label='monthly interest paid', width=w)
+
+        # ax.bar(x+w, np.cumsum(early_base), label='debt paid (early)', width=w)
+        # ax.bar(x+w, np.cumsum(early_interest), bottom=np.cumsum(early_base), label='interest paid (early)', width=w)
+
+        ax.xaxis_date()
+        plt.ylabel('euros')
+
+        plt.legend()
+        plt.title('Payment accumulation over the years')
+        plt.show()
+
+
+def calc_income_tax(income):
+    bracket_amounts =  [75_624, float("inf")]
+    bracket_percentages = [0.3748, 0.4950] # the actual income percentages shift a bit over time, but this should be accurate enough
+    return income * bracket_percentages[0] if income < bracket_amounts[0] else (bracket_amounts[0] * bracket_percentages[0]) + ((income-bracket_amounts[0]) * bracket_percentages[1])
+    
+def calc_hypotheekrente_aftrek(interest: np.array, incomes: np.array, house_worths: np.array, max_deduction_rates: np.array) -> float:
+    # compute hyptoheekrente aftrek
+
+    calcs = []
+    for income, interest_paid, eigenwoning_forfait, max_deduction_rate in zip(incomes, interest, house_worths*0.0035, max_deduction_rates): # iterates years (i.e. yearly income, yearly interest paid)
+        tax_before = calc_income_tax(income)
+        tax_after = calc_income_tax(max(0, income - interest_paid))
+        savings = (tax_before - tax_after) - eigenwoning_forfait * max_deduction_rate
+        calcs.append(min(savings, interest_paid * max_deduction_rate))
+    return np.array(calcs)
+    # return np.array([min(calc_income_tax(income) - calc_income_tax(max(0, income - interest_paid)), interest_paid * max_deduction_rate) for income, interest_paid in zip(incomes, calc_interest(debt, interest))])
+
+def parser_hypotheekrente_aftrek(subparsers):
+    sub = subparsers.add_parser('hypotheekrente_aftrek')
+    sub.add_argument('--income', type=float, required=True, help='Sum to be paid early')
+    sub.add_argument('--house-worth', type=float, required=True, help='WOZ waarde (worth of a house according to tax people)')
+    sub.add_argument('--emulate-house-increase', type=float, help='Emulates house price increases for realism. Provide as "0.02" for 2% increase year after year.')
+    sub.add_argument('--emulate-income', type=float, help='Emulates income increase for realism. Provide as "0.02" for 2% income increase year after year.')
+    sub.add_argument('--extra-builddown-start', type=lambda s: datetime.strptime(s, '%Y'), help='Emulates yearly-linear deduction removal, this sets the start. Provide a year, like "2040".')
+    sub.add_argument('--extra-builddown-end', type=lambda s: datetime.strptime(s, '%Y'), help='Emulates yearly-linear deduction removal, this sets the end. Provide a year, like "2040".')
+    return sub
+
+def comp_hypotheekrente_aftrek(args):
+    base = calc_base(args.loan, args.interest, args.type, args.duration)
+    debt = calc_debt(base)
+    interest = calc_interest(debt, args.interest).reshape(-1, 12).sum(axis=1)
+    # incomes over time (yearly basis)
+    incomes = np.full(args.duration//12, args.income) if not args.emulate_income else args.income * ((1.0+args.emulate_income)**np.array(args.duration // 12))
+    house_worths = np.full(args.duration//12, args.house_worth) if not args.emulate_house_increase else args.house_worth * ((1.0+args.emulate_house_increase)**np.array(args.duration // 12))
+    max_deduction_rates = np.full(len(interest), 0.3748)
+
+    if args.start.year < 2024:
+        print('minor inaccuracies: before 2024, hypotheekrenteaftrek was a lot more than it is now. So the results here are more of a lower limit to you.')
+
+    tax_gains = calc_hypotheekrente_aftrek(interest, incomes, house_worths, max_deduction_rates)
+    print(f'Total gains: {np.sum(tax_gains)}')
+
+    if args.extra_builddown_start:
+        assert args.extra_builddown_end != None
+        year_start_idx = (args.extra_builddown_start.year - args.start.year)
+        year_end_idx = (args.extra_builddown_end.year - args.start.year)
+        max_deduction_rates = np.array([0.3748 for x in range (year_start_idx)] + [0.3748 - (0.3748/(year_end_idx - year_start_idx)*(x+1)) for x in range(year_end_idx-year_start_idx)] + [0 for x in range((args.duration//12) - year_end_idx)])
+        assert len(max_deduction_rates) == len(incomes)
+        tax_gains_with_removal = calc_hypotheekrente_aftrek(interest, incomes, house_worths, max_deduction_rates)
+        delta = np.sum(tax_gains) - np.sum(tax_gains_with_removal)
+        print(f'Total gains: {np.sum(tax_gains_with_removal)} (with the builddown)')
+        print(f'Delta is {delta} in total, or {delta/(args.duration/12)} per year, or {delta/args.duration} every month for {args.duration} months')
+
+
+    if args.visual:
+        x = np.arange(args.start, args.duration // 12, dtype='datetime64[Y]')
+        x = date2num(x)
+
+        fig, ax = plt.subplots()
+        w = 15.5 # this is the bar width, expressed in days
+        ax.plot(x, tax_gains / 12, label='hypotheekrente aftrek gains', marker='.')
+        if args.extra_builddown_start:
+            ax.plot(x, tax_gains_with_removal / 12, label='hypotheekrente aftrek gains (with fast removal)', marker='.')
+
+        ax.xaxis_date()
+        plt.ylabel('euros')
+
+        plt.legend()
+        plt.title('Deduction gains every month')
+        plt.show()
+
+        fig, ax = plt.subplots()
+        w = 15.5 # this is the bar width, expressed in days
+        ax.plot(x, np.cumsum(tax_gains), label='hypotheekrente aftrek gains', marker='.')
+        if args.extra_builddown_start:
+            ax.plot(x, np.cumsum(tax_gains_with_removal), label='hypotheekrente aftrek gains (with fast removal)', marker='.')
+
+        ax.xaxis_date()
+        plt.ylabel('euros')
+
+        plt.legend()
+        plt.title('Deduction gain sum totals')
+        plt.show()
 
 
 def parser_early_payment(subparsers):
@@ -176,7 +301,7 @@ def main():
     if args.computation:
         fn_load(f'comp_{args.computation}')(args)
     else:
-        print('No specific computation requested')
+        print(f'No specific computation requested. Options: "{fn_name_comps()}"')
 
 if __name__ == '__main__':
     main()
